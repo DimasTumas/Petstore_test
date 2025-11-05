@@ -1,6 +1,6 @@
 import pytest
 from helpers.api_client import PetstoreAPIClient
-from helpers.data_generators import PetDataGenerator, OrderDataGenerator
+from helpers.data_generators import PetDataGenerator, OrderDataGenerator, UserDataGenerator
 
 
 @pytest.fixture(scope="function")
@@ -16,3 +16,8 @@ def pet_data_generator():
 @pytest.fixture(scope="function")
 def order_data_generator():
     yield OrderDataGenerator
+
+
+@pytest.fixture(scope="function")
+def user_data_generator():
+    yield UserDataGenerator
