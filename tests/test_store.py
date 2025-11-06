@@ -31,16 +31,27 @@ class TestStoreOrderCRUD:
         create_response = api_client.create_store_order(order_data)
         assert create_response.status_code == 200
 
-        order_id = order_data["id"]
-        response = api_client.get_store_order(order_id)
-
-        assert response.status_code in [200, 404]
-        if response.status_code == 200:
-            order = response.json()
-            assert order["id"] == order_id
-            assert isinstance(order["id"], int)
-            assert isinstance(order["petId"], int)
-            assert isinstance(order["quantity"], int)
+        # Используем ID из ответа создания
+        created_order = create_response.json()
+        order_id = created_order["id"]
+        
+        # Используем retry механизм для получения заказа
+        # (демо API Petstore может иметь нестабильную задержку распространения данных)
+        max_attempts = 5
+        response = None
+        for attempt in range(max_attempts):
+            if attempt > 0:
+                time.sleep(0.5 * attempt)  # Увеличивающаяся задержка
+            response = api_client.get_store_order(order_id)
+            if response.status_code == 200:
+                break
+        
+        assert response.status_code == 200, f"Не удалось получить заказ после {max_attempts} попыток. Последний ответ: {response.text if response else 'None'}"
+        order = response.json()
+        assert order["id"] == order_id
+        assert isinstance(order["id"], int)
+        assert isinstance(order["petId"], int)
+        assert isinstance(order["quantity"], int)
 
     def test_get_nonexistent_order(self, api_client):
         """Проверка HTTP статуса 404 для несуществующего заказа"""
@@ -53,9 +64,34 @@ class TestStoreOrderCRUD:
         create_response = api_client.create_store_order(order_data)
         assert create_response.status_code == 200
 
-        order_id = order_data["id"]
-        response = api_client.delete_store_order(order_id)
-        assert response.status_code in [200, 404]
+        # Используем ID из ответа создания
+        created_order = create_response.json()
+        order_id = created_order["id"]
+        
+        # Убеждаемся, что заказ существует перед удалением
+        # (используем retry, так как демо API Petstore имеет задержку распространения данных)
+        max_attempts = 10
+        for attempt in range(max_attempts):
+            if attempt > 0:
+                time.sleep(0.5 * attempt)
+            get_response = api_client.get_store_order(order_id)
+            if get_response.status_code == 200:
+                break
+        
+        # Удаляем заказ с retry механизмом
+        delete_response = None
+        for attempt in range(max_attempts):
+            if attempt > 0:
+                time.sleep(0.5 * attempt)
+            delete_response = api_client.delete_store_order(order_id)
+            if delete_response.status_code == 200:
+                break
+        
+        assert delete_response.status_code == 200, f"Не удалось удалить заказ после {max_attempts} попыток. Последний ответ: {delete_response.text if delete_response else 'None'}"
+        
+        # Проверяем, что заказ действительно удален
+        verify_response = api_client.get_store_order(order_id)
+        assert verify_response.status_code == 404, "Заказ должен быть удален, но все еще существует"
 
 
 class TestStoreBoundaryValues:
@@ -65,13 +101,13 @@ class TestStoreBoundaryValues:
         """Проверка граничного значения - нулевое количество"""
         order_data = order_data_generator.generate_order_data(quantity=0)
         response = api_client.create_store_order(order_data)
-        assert response.status_code in [200, 400, 405]
+        assert response.status_code in [200]
 
     def test_create_order_with_negative_quantity(self, api_client, order_data_generator):
         """Проверка граничного значения - отрицательное количество"""
         order_data = order_data_generator.generate_order_data(quantity=-1)
         response = api_client.create_store_order(order_data)
-        assert response.status_code in [200, 400, 405]
+        assert response.status_code in [200]
 
 
 class TestStoreInvalidData:
@@ -81,14 +117,14 @@ class TestStoreInvalidData:
         """Проверка некорректных данных - невалидный статус"""
         order_data = order_data_generator.generate_order_data(status="invalid_status")
         response = api_client.create_store_order(order_data)
-        assert response.status_code in [200, 400, 405]
+        assert response.status_code in [200]
 
     def test_create_order_with_invalid_id_type(self, api_client, order_data_generator):
         """Проверка некорректных данных - ID типа строка"""
         order_data = order_data_generator.generate_order_data()
         order_data["id"] = "not_a_number"
         response = api_client.create_store_order(order_data)
-        assert response.status_code in [200, 400, 405, 500]
+        assert response.status_code in [500]
 
 
 class TestStoreIdempotency:
@@ -101,7 +137,7 @@ class TestStoreIdempotency:
         assert response1.status_code == 200
 
         response2 = api_client.create_store_order(order_data)
-        assert response2.status_code in [200, 400, 405]
+        assert response2.status_code in [200]
 
         if response1.status_code == 200 and response2.status_code == 200:
             order1 = response1.json()
@@ -114,12 +150,33 @@ class TestStoreIdempotency:
         create_response = api_client.create_store_order(order_data)
         assert create_response.status_code == 200
 
-        order_id = order_data["id"]
-        delete_response1 = api_client.delete_store_order(order_id)
-        assert delete_response1.status_code in [200, 404]
+        # Используем ID из ответа создания
+        created_order = create_response.json()
+        order_id = created_order["id"]
+        
+        # Убеждаемся, что заказ существует перед удалением
+        max_attempts = 5
+        for attempt in range(max_attempts):
+            if attempt > 0:
+                time.sleep(0.5 * attempt)
+            get_response = api_client.get_store_order(order_id)
+            if get_response.status_code == 200:
+                break
+        
+        # Первое удаление с retry механизмом
+        delete_response1 = None
+        for attempt in range(max_attempts):
+            if attempt > 0:
+                time.sleep(0.5 * attempt)
+            delete_response1 = api_client.delete_store_order(order_id)
+            if delete_response1.status_code == 200:
+                break
+        
+        assert delete_response1.status_code == 200, f"Не удалось удалить заказ после {max_attempts} попыток. Последний ответ: {delete_response1.text if delete_response1 else 'None'}"
 
+        # Повторное удаление должно вернуть 404
         delete_response2 = api_client.delete_store_order(order_id)
-        assert delete_response2.status_code in [200, 404]
+        assert delete_response2.status_code == 404, "Повторное удаление должно вернуть 404"
 
 
 class TestStoreAdvanced:
@@ -147,7 +204,7 @@ class TestStoreAdvanced:
 
         order2_data = order_data_generator.generate_order_data(order_id=order_id, pet_id=2)
         response2 = api_client.create_store_order(order2_data)
-        assert response2.status_code in [200, 400, 405]
+        assert response2.status_code in [200]
 
     def test_create_order_performance(self, api_client, order_data_generator):
         """Базовый тест производительности - создание должно быть быстрым"""

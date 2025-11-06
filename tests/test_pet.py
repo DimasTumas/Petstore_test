@@ -29,20 +29,31 @@ class TestPetCRUD:
         create_response = api_client.create_pet(pet_data)
         assert create_response.status_code == 200
 
-        pet_id = pet_data["id"]
-        response = api_client.get_pet(pet_id)
-
-        assert response.status_code in [200, 404]
-        if response.status_code == 200:
-            pet = response.json()
-            assert pet["id"] == pet_id
-            assert isinstance(pet["id"], int)
-            assert isinstance(pet["name"], str)
+        # Используем ID из ответа создания, чтобы убедиться в корректности
+        created_pet = create_response.json()
+        pet_id = created_pet["id"]
+        
+        # Используем retry механизм для получения питомца
+        # (демо API Petstore может иметь нестабильную задержку распространения данных)
+        max_attempts = 5
+        response = None
+        for attempt in range(max_attempts):
+            if attempt > 0:  # Задержка перед повторными попытками
+                time.sleep(0.5 * attempt)  # Увеличивающаяся задержка: 0.5, 1.0, 1.5, 2.0 сек
+            response = api_client.get_pet(pet_id)
+            if response.status_code == 200:
+                break
+        
+        assert response.status_code == 200, f"Не удалось получить питомца после {max_attempts} попыток. Последний ответ: {response.text if response else 'None'}"
+        pet = response.json()
+        assert pet["id"] == pet_id
+        assert isinstance(pet["id"], int)
+        assert isinstance(pet["name"], str)
 
     def test_get_nonexistent_pet(self, api_client):
         """Проверка HTTP статуса 404 для несуществующего питомца"""
-        response = api_client.get_pet(999999999)
-        assert response.status_code in [200, 404]
+        response = api_client.get_pet(9999999999999)
+        assert response.status_code in [404]
 
     def test_update_pet_success(self, api_client, pet_data_generator):
         """Проверка успешного обновления с проверкой структуры ответа"""
@@ -70,9 +81,34 @@ class TestPetCRUD:
         create_response = api_client.create_pet(pet_data)
         assert create_response.status_code == 200
 
-        pet_id = pet_data["id"]
-        delete_response = api_client.delete_pet(pet_id)
-        assert delete_response.status_code in [200, 404]
+        # Используем ID из ответа создания
+        created_pet = create_response.json()
+        pet_id = created_pet["id"]
+        
+        # Убеждаемся, что питомец существует перед удалением
+        # (используем retry, так как демо API Petstore имеет задержку распространения данных)
+        max_attempts = 5
+        for attempt in range(max_attempts):
+            if attempt > 0:
+                time.sleep(0.5 * attempt)
+            get_response = api_client.get_pet(pet_id)
+            if get_response.status_code == 200:
+                break
+        
+        # Удаляем питомца с retry механизмом
+        delete_response = None
+        for attempt in range(max_attempts):
+            if attempt > 0:
+                time.sleep(0.5 * attempt)
+            delete_response = api_client.delete_pet(pet_id)
+            if delete_response.status_code == 200:
+                break
+        
+        assert delete_response.status_code == 200, f"Не удалось удалить питомца после {max_attempts} попыток. Последний ответ: {delete_response.text if delete_response else 'None'}"
+        
+        # Проверяем, что питомец действительно удален
+        verify_response = api_client.get_pet(pet_id)
+        assert verify_response.status_code == 404, "Питомец должен быть удален, но все еще существует"
 
 
 class TestPetBoundaryValues:
@@ -82,25 +118,25 @@ class TestPetBoundaryValues:
         """Проверка граничного значения - пустое имя"""
         pet_data = pet_data_generator.generate_pet_data(name="")
         response = api_client.create_pet(pet_data)
-        assert response.status_code in [200, 400, 405]
+        assert response.status_code in [200]
 
     def test_create_pet_with_very_long_name(self, api_client, pet_data_generator):
         """Проверка граничного значения - очень длинное имя (1000 символов)"""
         long_name = "A" * 1000
         pet_data = pet_data_generator.generate_pet_data(name=long_name)
         response = api_client.create_pet(pet_data)
-        assert response.status_code in [200, 400, 405]
+        assert response.status_code in [200]
 
     def test_create_pet_with_zero_id(self, api_client, pet_data_generator):
         """Проверка граничного значения - ID = 0"""
         pet_data = pet_data_generator.generate_pet_data(pet_id=0)
         response = api_client.create_pet(pet_data)
-        assert response.status_code in [200, 400, 405]
+        assert response.status_code in [200]
 
     def test_get_pet_with_invalid_id(self, api_client):
         """Проверка HTTP статуса 400 для невалидного ID"""
         response = api_client._make_request("GET", "/pet/invalid_string_id")
-        assert response.status_code in [400, 404, 405]
+        assert response.status_code in [404]
 
 
 class TestPetInvalidData:
@@ -110,13 +146,13 @@ class TestPetInvalidData:
         """Проверка некорректных данных - невалидный статус"""
         pet_data = pet_data_generator.generate_pet_data(status="invalid_status_xyz")
         response = api_client.create_pet(pet_data)
-        assert response.status_code in [200, 400, 405]
+        assert response.status_code in [200]
 
     def test_create_pet_with_invalid_id_type(self, api_client):
         """Проверка некорректных данных - ID типа строка"""
         invalid_pet = {"id": "not_a_number", "name": "Test", "status": "available"}
         response = api_client.create_pet(invalid_pet)
-        assert response.status_code in [400, 405, 500]
+        assert response.status_code in [500]
 
 
 class TestPetIdempotency:
@@ -129,7 +165,7 @@ class TestPetIdempotency:
         assert response1.status_code == 200
 
         response2 = api_client.create_pet(pet_data)
-        assert response2.status_code in [200, 400, 405]
+        assert response2.status_code in [200]
 
         if response1.status_code == 200 and response2.status_code == 200:
             pet1 = response1.json()
@@ -164,12 +200,14 @@ class TestPetIdempotency:
         create_response = api_client.create_pet(pet_data)
         assert create_response.status_code == 200
 
+        time.sleep(5)
+
         pet_id = pet_data["id"]
         delete_response1 = api_client.delete_pet(pet_id)
-        assert delete_response1.status_code in [200, 404]
+        assert delete_response1.status_code in [200]
 
         delete_response2 = api_client.delete_pet(pet_id)
-        assert delete_response2.status_code in [200, 404]
+        assert delete_response2.status_code in [404]
 
 
 class TestPetAdvanced:
@@ -196,9 +234,11 @@ class TestPetAdvanced:
         response1 = api_client.create_pet(pet1_data)
         assert response1.status_code == 200
 
+        time.sleep(5)
+
         pet2_data = pet_data_generator.generate_pet_data(pet_id=pet_id, name="Second Pet")
         response2 = api_client.create_pet(pet2_data)
-        assert response2.status_code in [200, 400, 405]
+        assert response2.status_code in [200]
 
     def test_create_pet_performance(self, api_client, pet_data_generator):
         """Базовый тест производительности - создание должно быть быстрым"""
